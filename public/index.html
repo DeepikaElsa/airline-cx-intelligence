@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Airline Feedback Triage</title>
+<style>
+  :root {
+    --ink: #1f2937; --muted: #6b7280; --line: #e5e7eb; --accent: #0f766e;
+    --bad: #b91c1c; --bg: #f7f7f5; --card: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --ink: #e5e7eb; --muted: #9ca3af; --line: #374151; --accent: #5eead4; --bad: #f87171; --bg: #111827; --card: #1f2937; }
+  }
+  :root[data-theme="dark"] { --ink: #e5e7eb; --muted: #9ca3af; --line: #374151; --accent: #5eead4; --bad: #f87171; --bg: #111827; --card: #1f2937; }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0; font-weight: 650; }
+  select, input[type=range] { font: inherit; }
+  select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); }
+  label { color: var(--muted); font-size: 14px; }
+
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .kpi { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .kpi b { display: block; font-size: 24px; font-weight: 650; }
+  .kpi span { color: var(--muted); font-size: 13px; }
+
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
+  h2 { font-size: 16px; margin: 0; font-weight: 650; }
+  .hint { margin: 2px 0 12px; color: var(--muted); font-size: 13px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+  .plot { width: 100%; height: 280px; }
+
+  .cap { display: flex; gap: 14px; align-items: center; margin: 4px 0 6px; }
+  .cap input { flex: 1; accent-color: var(--accent); }
+  .cap output { min-width: 80px; font-weight: 650; text-align: right; }
+  .summary { font-size: 14px; margin: 0 0 12px; }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; white-space: nowrap; }
+  td.num { text-align: right; white-space: nowrap; }
+  td.tweet { color: var(--muted); min-width: 240px; }
+  .sig { color: var(--accent); font-weight: 600; }
+  .muted { color: var(--muted); }
+  footer { color: var(--muted); font-size: 13px; margin-top: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Airline feedback triage</h1>
+    <label>Airline&nbsp;
+      <select id="airline" aria-label="Airline"></select>
+    </label>
+  </header>
+
+  <div class="kpis" id="kpis"></div>
+
+  <section>
+    <h2>1. How passengers feel</h2>
+    <p class="hint">Share of tweets by predicted sentiment.</p>
+    <div id="sentiment" class="plot" style="height:110px"></div>
+  </section>
+
+  <div class="grid2">
+    <section>
+      <h2>2. Why negative tweets were posted</h2>
+      <p class="hint">Reason given for each negative tweet (top 10).</p>
+      <div id="reasons" class="plot"></div>
+    </section>
+    <section>
+      <h2>3. Issues linked to dissatisfaction</h2>
+      <p class="hint">Share of tweets that are negative when an issue is mentioned, versus when it is not.</p>
+      <div id="issues" class="plot"></div>
+    </section>
+  </div>
+
+  <section>
+    <h2>4. Answer these first</h2>
+    <p class="hint">Best set of complaints to handle within your support time, chosen by an exact optimiser.</p>
+    <div class="cap">
+      <label for="cap">Support time</label>
+      <input type="range" id="cap" min="0" max="0" step="1" value="0">
+      <output id="capOut"></output>
+    </div>
+    <p class="summary" id="capSummary"></p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Issue</th><th>Airline</th><th class="num">Severity</th><th class="num">Minutes</th><th>Tweet</th></tr></thead>
+        <tbody id="queue"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="grid2">
+    <section>
+      <h2>Model check</h2>
+      <p class="hint">Points on the dotted line mean the predicted probabilities match reality.</p>
+      <div id="calib" class="plot"></div>
+      <p class="hint" id="modelNote"></p>
+    </section>
+    <section>
+      <h2>Per-class accuracy</h2>
+      <p class="hint">Held-out results from 5-fold cross-validation.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Class</th><th class="num">Precision</th><th class="num">Recall</th><th class="num">F1</th><th class="num">Tweets</th></tr></thead>
+          <tbody id="perClass"></tbody>
+        </table>
+      </div>
+      <p class="hint" id="statsNote"></p>
+    </section>
+  </div>
+
+  <footer id="footer"></footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.35.2/plotly.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  let R = null;
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const pct = (x, d = 1) => (x == null ? "–" : (x * 100).toFixed(d) + "%");
+  const plotCfg = { displayModeBar: false, responsive: true };
+  const layoutBase = { paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font: { color: "inherit", size: 12 } };
+  const COLORS = { negative: "#b91c1c", neutral: "#9ca3af", positive: "#0f766e" };
+
+  const scope = () => R.scopes[$("airline").value];
+
+  function renderKpis(s) {
+    const total = s.tweets || 1;
+    const items = [
+      [s.tweets.toLocaleString(), "Tweets analysed"],
+      [pct(s.sentiment_counts.negative / total), "Negative share"],
+      [R.model.macro_f1.toFixed(2), "Model macro F1"],
+      [s.priority.open_complaints.toLocaleString(), "Open complaints (predicted)"],
+    ];
+    $("kpis").innerHTML = items.map(([v, k]) => `<div class="kpi"><b>${v}</b><span>${k}</span></div>`).join("");
+  }
+
+  function renderSentiment(s) {
+    const labels = ["negative", "neutral", "positive"];
+    const total = labels.reduce((a, l) => a + s.sentiment_counts[l], 0) || 1;
+    Plotly.react("sentiment", labels.map((l) => ({
+      type: "bar", orientation: "h", name: l,
+      x: [s.sentiment_counts[l] / total], y: [""],
+      marker: { color: COLORS[l] },
+      hovertemplate: `${l}: %{x:.1%}<extra></extra>`,
+    })), { ...layoutBase, barmode: "stack", margin: { l: 4, r: 4, t: 4, b: 30 },
+           xaxis: { tickformat: ".0%", range: [0, 1] }, yaxis: { showticklabels: false },
+           legend: { orientation: "h", y: -0.5 } }, plotCfg);
+  }
+
+  function renderReasons(s) {
+    const r = s.negative_reasons.slice().reverse();
+    Plotly.react("reasons", [{
+      type: "bar", orientation: "h", x: r.map((d) => d.count), y: r.map((d) => d.reason),
+      marker: { color: COLORS.negative }, hovertemplate: "%{y}: %{x}<extra></extra>",
+    }], { ...layoutBase, margin: { l: 170, r: 10, t: 4, b: 30 }, xaxis: { title: "tweets" } }, plotCfg);
+  }
+
+  function renderIssues(s) {
+    const rows = s.issues.slice().reverse();
+    const labels = rows.map((r) => `${r.issue} (${r.mentions})`);
+    Plotly.react("issues", [
+      { type: "bar", orientation: "h", name: "mentioned", x: rows.map((r) => r.rate_mentioned ?? 0), y: labels, marker: { color: COLORS.negative } },
+      { type: "bar", orientation: "h", name: "not mentioned", x: rows.map((r) => r.rate_not_mentioned ?? 0), y: labels, marker: { color: "#d1d5db" } },
+    ], { ...layoutBase, barmode: "group", margin: { l: 190, r: 10, t: 4, b: 40 },
+         xaxis: { tickformat: ".0%", range: [0, 1] }, legend: { orientation: "h", y: -0.2 } }, plotCfg);
+  }
+
+  function renderQueue(s) {
+    const grid = s.priority.grid;
+    const g = grid[+$("cap").value];
+    $("capOut").textContent = `${g.capacity_minutes} min`;
+    $("capSummary").textContent =
+      `${g.tickets} complaints use ${Math.round(g.minutes_used)} of ${g.capacity_minutes} minutes ` +
+      `and cover ${pct(g.share_of_total_severity, 0)} of total complaint severity` +
+      (g.items.length < g.tickets ? ` (showing top ${g.items.length}).` : ".");
+    $("queue").innerHTML = g.items.length
+      ? g.items.map((t) => `<tr><td>${esc(t.issue)}</td><td>${esc(t.airline)}</td>
+          <td class="num">${t.severity.toFixed(2)}</td><td class="num">${t.minutes}</td>
+          <td class="tweet">${esc(t.short_text)}</td></tr>`).join("")
+      : `<tr><td colspan="5" class="muted">Nothing fits in this much time.</td></tr>`;
+  }
+
+  function renderModel() {
+    const c = R.model.calibration;
+    Plotly.react("calib", [
+      { x: [0, 1], y: [0, 1], mode: "lines", line: { dash: "dot", color: "#9ca3af" }, name: "perfect" },
+      { x: c.mean_predicted, y: c.observed_rate, mode: "lines+markers", line: { color: COLORS.positive }, name: "model" },
+    ], { ...layoutBase, margin: { l: 50, r: 10, t: 10, b: 50 },
+         xaxis: { title: "predicted P(negative)", range: [0, 1] },
+         yaxis: { title: "observed share negative", range: [0, 1] },
+         legend: { orientation: "h", y: -0.25 } }, plotCfg);
+    $("modelNote").textContent = `Brier score (negative class): ${c.brier_negative.toFixed(3)}. Lower is better, 0 is perfect.`;
+    $("perClass").innerHTML = Object.entries(R.model.per_class).map(([k, v]) =>
+      `<tr><td>${esc(k)}</td><td class="num">${pct(v.precision)}</td><td class="num">${pct(v.recall)}</td>
+       <td class="num">${pct(v.f1)}</td><td class="num">${v.support.toLocaleString()}</td></tr>`).join("");
+    const sig = R.stats.issue_vs_dissatisfaction.filter((r) => r.significant).map((r) => r.issue);
+    $("statsNote").innerHTML = `Chi-square test (p &lt; 0.05) shows a significant link between dissatisfaction and: ` +
+      `<span class="sig">${sig.length ? esc(sig.join(", ")) : "none"}</span>.`;
+  }
+
+  function render() {
+    const s = scope();
+    renderKpis(s);
+    renderSentiment(s);
+    renderReasons(s);
+    renderIssues(s);
+    renderQueue(s);
+  }
+
+  async function init() {
+    R = await (await fetch("data/results.json", { cache: "no-store" })).json();
+
+    const sel = $("airline");
+    Object.keys(R.scopes).forEach((k) => sel.add(new Option(k, k)));
+
+    const slider = $("cap");
+    slider.max = R.scopes.All.priority.grid.length - 1;
+    slider.value = Math.floor(slider.max / 2);
+
+    sel.addEventListener("change", render);
+    slider.addEventListener("input", () => renderQueue(scope()));
+
+    renderModel();
+    render();
+    $("footer").textContent =
+      `Data: ${R.dataset.source} · ${R.dataset.rows.toLocaleString()} tweets · ${R.dataset.airlines} airlines · ` +
+      `Generated ${R.generated_at}. Support-time settings are assumptions set in src/config.py.`;
+  }
+
+  init().catch((e) => {
+    document.querySelector("main").insertAdjacentHTML("afterbegin",
+      `<section style="color:var(--bad)">Could not load data/results.json. Run the pipeline first (see README). ${esc(e.message)}</section>`);
+  });
+})();
+</script>
+</body>
+</html>
